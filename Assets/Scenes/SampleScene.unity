@@ -701,6 +701,38 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7175fb639ae15704d98681ced2efb381, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  optimize_previousState: []
+  optimize_currentState: []
+  learningRate: 0.1
+  discountFactor: 0.9
+  explorationRate: 0.1
+  Episodes: 1000
+  now_episode: 0
+  e: 2.7182817
+  goalState: {x: 0, y: 0, z: 0}
+  numActions: 4
+  dx: 00000000ffffffff0000000001000000000000000100000001000000ffffffffffffffff
+  dz: 0100000000000000ffffffff000000000000000001000000ffffffff01000000ffffffff
+  Agents: []
+  currentState: {x: 0, y: 0, z: 0}
+  previousState: {x: 0, y: 0, z: 0}
+  value1: []
+  value2: []
+  episodereward: []
+  crash: 
+  Agents_currentState: []
+  Agents_previousState: []
+  taskST: []
+  Agent_num: 5
+  train_data: []
+  train_crash: 
+  train_reward: []
+  Algorithm: Pei
+  path: 0
+  dynamic: 1
+  qTable: {fileID: 1262873476}
+  use_module: 0
+  map: {fileID: 522667370}
 --- !u!4 &1485062526
 Transform:
   m_ObjectHideFlags: 0
@@ -763,14 +795,14 @@ MonoBehaviour:
   learningRate: 0.1
   discountFactor: 0.9
   explorationRate: 0.1
-  Episodes: 500
+  Episodes: 1000
   now_episode: 0
   goalState: {x: 0, y: 0, z: 0}
   numActions: 4
   traditionalState: 0
   Agent_num: 5
-  Algorithm: HADQ-SSR-OneRound
-  path: 1
+  Algorithm: RSAL
+  path: 0
   dynamic: 0
   qTable: {fileID: 1262873476}
   use_module: 1

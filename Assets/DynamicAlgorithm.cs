@@ -13,6 +13,8 @@ using static UnityEngine.Random;
 using System.Xml;
 using System.Runtime.ConstrainedExecution;
 using static UnityEngine.UIElements.UxmlAttributeDescription;
+using static UnityEditor.PlayerSettings;
+using System.Security.Cryptography;
 
 
 [System.Serializable]
@@ -43,14 +45,15 @@ public class DynamicAlgorithm : MonoBehaviour
     public bool[,] st_Q;
 
 
-    /*优化状态后的强化学习参数*/
+    //优化状态后的强化学习参数
     private Dictionary<string, Dictionary<int, double>> optimizeQ;
+    private Dictionary<string, Dictionary<int, double>> grad_moving_avg;
 
     private string[] optimize_previousState;
     private string[] optimize_currentState;
     private Dictionary<string, Dictionary<int, KeyValuePair<string, float>>> optimizeModelQ = new Dictionary<string, Dictionary<int, KeyValuePair<string, float>>>();
 
-    /*强化学习参数*/
+    //强化学习参数
     public float learningRate = 0.1f; // 学习率
     public float discountFactor = 0.9f; // 折扣因子
     public float explorationRate = 0.1f; // 贪婪因子
@@ -62,23 +65,23 @@ public class DynamicAlgorithm : MonoBehaviour
     private object dataLock = new object(); // 训练数据锁
 
 
-    /*环境参数*/
+    //环境参数
     public Vector3 goalState;
     public int numActions = 8; // 动作数
     private int[] dx = { 0, -1, 0, 1, 0, 1, 1, -1, -1 };
     private int[] dz = { 1, 0, -1, 0, 0, 1, -1, 1, -1 };
 
-    private int[] sdx = { -1, 0, 1, 1, 1, 0, -1, -1};
-    private int[] sdz = { 1, 1, 1, 0, -1, -1, -1, 0};
+    private int[] sdx = { -1, 0, 1, 1, 1, 0, -1, -1 };
+    private int[] sdz = { 1, 1, 1, 0, -1, -1, -1, 0 };
     private System.Random[] random;
 
-    /*智能体参数*/
+    //智能体参数
     public static GameObject Agent;
     public bool traditionalState = false;
     private GameObject[] Agents;
     private Vector3 currentState; // 当前状态,仅表示坐标
     private Vector3 previousState; // 上一次的状态，仅表示坐标
-    private float[] value1, value2; // 智能体规划的路径长度(2D, 3D)
+    private float[] value1, value2, episodereward; // 智能体规划的路径长度(2D, 3D)
     private int[] crash; // 发生碰撞次数
     private string[] Agents_currentState;
     private string[] Agents_previousState;
@@ -92,8 +95,9 @@ public class DynamicAlgorithm : MonoBehaviour
     public int Agent_num = 4;
     private float[] train_data; // 训练数据，完成训练后需要输出打印到csv文件
     private int[] train_crash;
+    private float[] train_reward;
 
-    /*训练设置参数*/
+    //训练设置参数
     [SerializeField]
     string Algorithm; // 使用的算法名称，用来命名最后输出的文件
     [SerializeField]
@@ -122,8 +126,9 @@ public class DynamicAlgorithm : MonoBehaviour
         if (dynamic) map.GenerateObstacle();
 
         if (path) Agent_num = 1;
-        /*优化Q表后的一些初始化工作*/
+        //优化Q表后的一些初始化工作
         optimizeQ = new Dictionary<string, Dictionary<int, double>>(); // Q表初始化
+        grad_moving_avg = new Dictionary<string, Dictionary<int, double>>(); // 初始化移动平均
         optimize_previousState = new string[Agent_num];
         optimize_currentState = new string[Agent_num];
 
@@ -137,48 +142,51 @@ public class DynamicAlgorithm : MonoBehaviour
 
         value1 = new float[Agent_num];
         value2 = new float[Agent_num];
+        episodereward = new float[Agent_num]; // 记录训练的奖励值
         crash = new int[Agent_num];
 
         st_Q = new bool[map.width, map.height]; // 初始化状态表
         Q = new double[map.width, map.height, numActions]; // 初始化Q表
-        /*for (int i = 0; i < map.width; i ++)
+        for (int i = 0; i < map.width; i++)
         {
-            for (int j = 0; j < map.height; j ++)
+            for (int j = 0; j < map.height; j++)
             {
                 for (int k = 0; k < numActions; k++)
                     Q[i, j, k] = -10000f;
             }
-        }*/
+        }
 
         agentThreads = new Thread[Agent_num];
         random = new System.Random[Agent_num];
         taskST = new bool[Agent_num];
+
         // 初始化一些数据，具体见函数内部实现
         Init();
 
         train_data = new float[Episodes];
         train_crash = new int[Episodes];
-
+        train_reward = new float[Episodes];
         for (int i = 0; i < Episodes; i++)
         {
             train_data[i] = -1f;
         }
 
-        for (int i = 0; i < Agent_num; i++)
-        {
-            int agentIndex = i;
+        // 绘制路径代码
+        //for (int i = 0; i < Agent_num; i++)
+        //{
+        //    int agentIndex = i;
 
-            random[agentIndex] = new System.Random(UnityEngine.Random.Range(0, int.MaxValue));
-            if (path) agentThreads[agentIndex] = new Thread(() => draw_path(agentIndex));
-            //else agentThreads[agentIndex] = new Thread(() => RunAgent(agentIndex));
-            agentThreads[agentIndex].Start();
-        }
+        //    random[agentIndex] = new System.Random(UnityEngine.Random.Range(0, int.MaxValue));
+        //    if (path) agentThreads[agentIndex] = new Thread(() => draw_path(agentIndex));
+        //    //else agentThreads[agentIndex] = new Thread(() => RubunAgent(agentIndex));
+        //    agentThreads[agentIndex].Start();
+        //}
 
     }
 
     private void Update()
     {
-       //train();
+        train();
     }
 
     bool checkTask()
@@ -202,6 +210,7 @@ public class DynamicAlgorithm : MonoBehaviour
         {
             value1[i] = 0;
             value2[i] = 0;
+            episodereward[i] = 0.0f;
             crash[i] = 0; // 碰撞次数清空
             if (Agents[i] != null)
             {
@@ -254,29 +263,30 @@ public class DynamicAlgorithm : MonoBehaviour
         return state;
     }
 
-    /*void InitByAgentIndex(int agentIndex)
-    {
-        value1[agentIndex] = 0;
-        value2[agentIndex] = 0;
+    //void InitByAgentIndex(int agentIndex)
+    //{
+    //    value1[agentIndex] = 0;
+    //    value2[agentIndex] = 0;
 
-        MainThreadDispatcher.RunOnMainThread(() =>
-        {
-            if (Agents[agentIndex] != null)
-            {
-                Destroy(Agents[agentIndex]);
-            }
-            Agents[agentIndex] = map.GenerateAgent();
-        });
+    //    MainThreadDispatcher.RunOnMainThread(() =>
+    //    {
+    //        if (Agents[agentIndex] != null)
+    //        {
+    //            Destroy(Agents[agentIndex]);
+    //        }
+    //        Agents[agentIndex] = map.GenerateAgent();
+    //    });
 
-        Agents_currentState[agentIndex] = new Vector3(0f, map.mapType[0, 0] + 1.5f, 0f);
-        Agents_previousState[agentIndex] = Agents_currentState[agentIndex];
+    //    Agents_currentState[agentIndex] = new Vector3(0f, map.mapType[0, 0] + 1.5f, 0f);
+    //    Agents_previousState[agentIndex] = Agents_currentState[agentIndex];
 
-    }*/
+    //}
 
 
     void draw_path(int agentIndex)
     {
         Thread.Sleep(5000);
+        // 调用训练好的模型
         Q_Table qtable = LoadQTableFromFile("D:\\Heuristic-Asynchronous-Dyna-Q-crash2000-5-2024-06-05-07-51-0");
         if (qtable != null)
         {
@@ -286,7 +296,7 @@ public class DynamicAlgorithm : MonoBehaviour
         {
             Debug.Log("qtable is null!!!");
         }
-        Vector3 cur = new Vector3 (0, 0, 0);
+        Vector3 cur = new Vector3(0, 0, 0);
         MainThreadDispatcher.RunOnMainThread(() =>
         {
             cur = Agents[agentIndex].transform.position;
@@ -320,10 +330,10 @@ public class DynamicAlgorithm : MonoBehaviour
         if (now_episode < Episodes) // 训练轮数还没结束
         {
 
-            /*for (int i = 0; i < Agent_num; i ++)
+            for (int i = 0; i < Agent_num; i++)
             {
                 Agents_currentState[i] = getState((int)Agents[i].transform.position.x, (int)Agents[i].transform.position.z);
-            }*/
+            }
 
             if (dynamic)
                 map.dynamic_hell_move(); // 障碍物先移动
@@ -333,8 +343,9 @@ public class DynamicAlgorithm : MonoBehaviour
                 if (IsGoalState(Agents[i].transform.position)) // 到达终点
                 {
                     train_data[now_episode] = value1[i]; // 记录本轮规划路径的代价
-                    train_crash[now_episode] = crash[i];
-                    Debug.Log("now_episode: " + now_episode + ", value1: " + value1[i] + ",value2:" + value2[i] + ",crash:" + crash[i]);
+                    train_crash[now_episode] = crash[i]; // 记录智能体与动态障碍物发生碰撞的次数
+                    train_reward[now_episode] = episodereward[i]; // 记录智能体本轮训练获得的奖励
+                    Debug.Log("now_episode: " + now_episode + ", value1: " + value1[i] + ",value2:" + value2[i] + ",crash:" + crash[i] + ",reward:" + episodereward[i]);
                     now_episode++;
 
                     Init();
@@ -368,8 +379,9 @@ public class DynamicAlgorithm : MonoBehaviour
             // 训练完毕，导出需要的训练数据
             WriteToCSV();
             WriteCrashToCSV();
-            /*WriteQtableToTxT(Q);*/
-            SaveQTableToFile(optimizeQ);
+            WriteRewardToCSV();
+            WriteQtableToTxT(Q);
+            //SaveQTableToFile(optimizeQ);
         }
     }
 
@@ -471,10 +483,10 @@ public class DynamicAlgorithm : MonoBehaviour
         }
     }
 
-    /*int choose_max(Vector3 state)
-    {
-        return GetMaxQValue(state);
-    }*/
+    //int choose_max(Vector3 state)
+    //{
+    //    return GetMaxQValue(state);
+    //}
 
     // EpsilonGreedy策略,返回选择的动作
     int EpsilonGreedy(int agentIndex)
@@ -482,13 +494,14 @@ public class DynamicAlgorithm : MonoBehaviour
         // 当前状态没有探索过，所以随机选择一个动作
         if (optimizeQ.ContainsKey(Agents_currentState[agentIndex]) == false)
         {
+            // 将当前状态添加到Q表
             optimizeQ.Add(Agents_currentState[agentIndex], new Dictionary<int, double>());
-            //optimizeQ.Add(Agents_currentState[agentIndex], );
             return UnityEngine.Random.Range(0, numActions);
         }
 
-        //float exp_rate = 0.0001f + (0.4f - 0.0001f) / (1 + (float)Math.Pow(e, (0.5 * (now_episode - Episodes / 2))));
-        float exp_rate = 0.1f;
+        float exp_rate = 0.0001f + (0.4f - 0.0001f) / (1 + (float)Math.Pow(e, (0.5 * (now_episode - Episodes / 2)))); // SA
+        //float exp_rate = 0.1f;
+
         // 小概率直接随机选择动作
         if (UnityEngine.Random.Range(0f, 1f) < exp_rate)
             return UnityEngine.Random.Range(0, numActions);
@@ -510,7 +523,7 @@ public class DynamicAlgorithm : MonoBehaviour
             }
 
             float exp_rate = 0.0001f + (0.4f - 0.0001f) / (1 + (float)Math.Pow(e, (0.5 * (ep - Episodes / 2))));
-            //float exp_rate = 0.1f;
+            // float exp_rate = 0.1f;
             // 小概率直接随机选择动作
             if (random[agentIndex].NextDouble() < exp_rate)
                 return random[agentIndex].Next(0, numActions);
@@ -593,14 +606,14 @@ public class DynamicAlgorithm : MonoBehaviour
             }
         }
 
-        /*List<int> tmp = new List<int>();
+        List<int> tmp = new List<int>();
         for (int i = 0; i < numActions; i++)
         {
             if (tmp_Q[x, z, i] == tmp_Q[x, z, action_index])
                 tmp.Add(i);
         }
 
-        return tmp[UnityEngine.Random.Range(0, tmp.Count)];*/
+        return tmp[UnityEngine.Random.Range(0, tmp.Count)];
         return action_index;
     }
 
@@ -608,14 +621,15 @@ public class DynamicAlgorithm : MonoBehaviour
     int GetMaxQValue(string state)
     {
         //Dictionary<string, Dictionary<int, double>> tmp_Q;
-        /*if (path)
-        {
-            tmp_Q = qTable.Q_table;
-        }
-        else
-        {
-            tmp_Q = optimizeQ;
-        }*/
+        //if (path)
+        //{
+        //    tmp_Q = qTable.Q_table;
+        //}
+        //else
+        //{
+        //    tmp_Q = optimizeQ;
+        //}
+        // 当前状态没有遍历过，返回-1
         if (optimizeQ.ContainsKey(state) == false)
         {
             optimizeQ.Add(state, new Dictionary<int, double>());
@@ -624,7 +638,7 @@ public class DynamicAlgorithm : MonoBehaviour
         // 获取状态对应的动作奖励字典
         var actionRewards = optimizeQ[state];
 
-        
+
         // 初始化最大值和对应的动作
         int maxAction = -1;
         double maxReward = double.MinValue;
@@ -650,7 +664,7 @@ public class DynamicAlgorithm : MonoBehaviour
         // 在state状态执行action动作
         int x = (int)Agents[Agent_idx].transform.position.x;
         int z = (int)Agents[Agent_idx].transform.position.z;
-        
+
         Vector3 preState = Agents[Agent_idx].transform.position;
         // 移动之后的x与z坐标
         x += dx[action];
@@ -663,11 +677,12 @@ public class DynamicAlgorithm : MonoBehaviour
             // 移动
             float y = GetCurrentStateY(new Vector3(x, 0, z));
             Vector3 next_state = new Vector3(x, y, z);
+
+            // 移动智能体
             if (Agents[Agent_idx] != null)
             {
                 Destroy(Agents[Agent_idx]);
             }
-
             Agents[Agent_idx] = Instantiate(map.agent, next_state, Quaternion.identity);
 
             // 更新状态
@@ -684,21 +699,17 @@ public class DynamicAlgorithm : MonoBehaviour
             Vector3 currState = Agents[Agent_idx].transform.position;
             // 返回奖励
 
-            // 当前动作成功躲避了障碍物
-            /*if (action == 4)
-            {
-                if (isObstacle(x + 1, z) || isObstacle(x, z + 1)) return MyReward(preState, currState, Agent_idx) + 1f;
-                else return -1;
-            }*/
-            float r = MyReward(preState, currState, Agent_idx);
+            float r = MyReward(pre, preState, currState, Agent_idx, action);
+            //float r = MyRewardShaping(pre, preState, currState, Agent_idx, action);
             //float r = PeiImproveReward(preState, currState, Agent_idx);
             //float r = QLearningReward(preState, currState, Agent_idx);
             return r;
         }
 
         if (isObstacle(x, z)) crash[Agent_idx]++;
+        episodereward[Agent_idx] -= 1;
         // 越界返回-1的奖励
-        return -1f;
+        return -5f;
     }
 
     bool isObstacle(int x, int z)
@@ -736,14 +747,18 @@ public class DynamicAlgorithm : MonoBehaviour
     }
 
 
-    float MyReward(Vector3 preState, Vector3 currState, int Agent_idx)
+    float MyReward(string state, Vector3 preState, Vector3 currState, int Agent_idx, int action)
     {
         float w = Mathf.Abs(currState.y - preState.y); // 前后高度差
 
         value1[Agent_idx] += w + 1;
         value2[Agent_idx] += 1;
         //Debug.Log(w);
-        if (IsGoalState(Agents[Agent_idx].transform.position)) return 10f;
+        if (IsGoalState(Agents[Agent_idx].transform.position))
+        {
+            episodereward[Agent_idx] += 10;
+            return 10f;
+        }
         //return -(w + 1);
 
         int curr_x = (int)currState.x, curr_z = (int)currState.z;
@@ -757,15 +772,77 @@ public class DynamicAlgorithm : MonoBehaviour
         d = d / (float)(Math.Sqrt(width * width + height * height)); // 归一化
 
         float reward = 0.1f * ((float)Math.Pow(e, -2 * d));
-        //Debug.Log("reward: " + reward);
+
+        int maxA = GetMaxQValue(state);
+        if (maxA == -1 || optimizeQ[state].ContainsKey(action) == false) return reward;
+
+        double Qvalue = optimizeQ[state][action];
+
+        double QSA = Qvalue - optimizeQ[state][maxA];
+
+        return reward - 0.01f * (float)QSA;
+        //return reward;
+    }
+
+    float MyRewardShaping(string state, Vector3 preState, Vector3 currState, int Agent_idx, int action)
+    {
+        float w = Mathf.Abs(currState.y - preState.y); // 前后高度差
+
+        value1[Agent_idx] += w + 1; // 记录路径代价
+        value2[Agent_idx] += 1; // 记录二维路径代价
+
+        if (IsGoalState(Agents[Agent_idx].transform.position)) return 20f;
+
+        int curr_x = (int)currState.x, curr_z = (int)currState.z, curr_y = (int)currState.y;
+        int goal_x = (int)goalState.x, goal_z = (int)goalState.z, goal_y = (int)goalState.y;
+
+        float curr_ddx = Math.Abs(curr_x - goal_x), curr_ddz = Math.Abs(curr_z - goal_z), curr_ddy = Math.Abs(curr_y - goal_y);
+
+        curr_ddx += currState.y; curr_ddz += currState.y;
+        float curr_d = -(float)Math.Sqrt(curr_ddz * curr_ddz + curr_ddx * curr_ddx); // 欧氏距离
+        //curr_d += currState.y;
+        int width = map.width, height = map.height;
+
+        // 执行动作后的势函数
+        //curr_d = curr_d / ((float)(Math.Sqrt(width * width + height * height))); // 归一化
+
+        int pre_x = (int)preState.x, pre_z = (int)preState.z, pre_y = (int)preState.y;
+        float pre_ddx = Math.Abs(pre_x - goal_x), pre_ddz = Math.Abs(pre_z - goal_z), pre_ddy = Math.Abs(pre_y - goal_y);
+
+        pre_ddx += preState.y; pre_ddz += preState.y;
+        float pre_d = -(float)Math.Sqrt(pre_ddz * pre_ddz + pre_ddx * pre_ddx); // 欧氏距离
+        //pre_d += preState.y;
+
+        // 执行动作前的势函数
+        //pre_d = pre_d / ((float)(Math.Sqrt(width * width + height * height))); // 归一化
+        float reward = (discountFactor * sigmoid(curr_d) - sigmoid(pre_d));
+
+        // 计算优势函数
+        int maxA = GetMaxQValue(state);
+        if (maxA == -1 || optimizeQ[state].ContainsKey(action) == false) return reward;
+
+        double Qvalue = optimizeQ[state][action];
+
+        double QSA = Qvalue - optimizeQ[state][maxA];
+        reward -= 0.01f * (float)QSA;
+        //Debug.Log("reward:" + reward);
         return reward;
+    }
+
+    float sigmoid(float x)
+    {
+        return (float)(1 / (1 + Math.Pow(Math.E, -x)));
     }
 
     float PeiImproveReward(Vector3 preState, Vector3 currState, int Agent_idx)
     {
         value1[Agent_idx] += Mathf.Abs(currState.y - preState.y) + 1;
         value2[Agent_idx] += 1;
-        if (IsGoalState(currState)) return 10f;
+        if (IsGoalState(currState))
+        {
+            episodereward[Agent_idx] += 10f;
+            return 10f;
+        }
 
         int curr_x = (int)currState.x, curr_z = (int)currState.z;
         int goal_x = (int)goalState.x, goal_z = (int)goalState.z;
@@ -777,20 +854,31 @@ public class DynamicAlgorithm : MonoBehaviour
         return reward;
     }
 
+    float OQLReward(Vector3 preState, Vector3 currState, int Agent_idx)
+    {
+        value1[Agent_idx] += Mathf.Abs(currState.y - preState.y) + 1;
+        value2[Agent_idx] += 1;
+
+
+
+        return 1.0f;
+    }
+
     float QLearningReward(Vector3 preState, Vector3 currState, int Agent_idx)
     {
         value1[Agent_idx] += Mathf.Abs(currState.y - preState.y) + 1;
         value2[Agent_idx] += 1;
         if (IsGoalState(currState))
         {
-            return 5f; // 到达终点
+            episodereward[Agent_idx] += 10;
+            return 10f; // 到达终点
         }
         return 0f; // 没到终点
     }
 
     private void WriteToCSV()
     {
-        string path = "C:\\Users\\ADMIN\\Desktop\\3D_MAP\\data\\csv\\step\\";//保存路径
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Static\\MyFunction\\step\\";//保存路径
         string fileName = path + Algorithm + "-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
         string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
         if (!Directory.Exists(path))
@@ -800,7 +888,7 @@ public class DynamicAlgorithm : MonoBehaviour
         if (!File.Exists(fileName))
         {
             StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
-            string str1 = "episode" + "," + "step" + "\t\n";
+            string str1 = "episode" + "," + "step" + "\n";
             sw.Write(str1);
             sw.Close();
         }
@@ -808,7 +896,7 @@ public class DynamicAlgorithm : MonoBehaviour
         StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
         for (int episode = 0; episode < Episodes; episode++)
         {
-            string str = episode + "," + train_data[episode] + "\t\n";
+            string str = episode + "," + train_data[episode] + "\n";
             swl.Write(str);
         }
         swl.Close();
@@ -816,7 +904,7 @@ public class DynamicAlgorithm : MonoBehaviour
 
     private void WriteCrashToCSV()
     {
-        string path = "C:\\Users\\ADMIN\\Desktop\\3D_MAP\\data\\csv\\crash\\";//保存路径
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Static\\MyFunction\\crash\\";//保存路径
         string fileName = path + Algorithm + "-Crash-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
         string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
         if (!Directory.Exists(path))
@@ -826,7 +914,7 @@ public class DynamicAlgorithm : MonoBehaviour
         if (!File.Exists(fileName))
         {
             StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
-            string str1 = "episode" + "," + "crash" + "\t\n";
+            string str1 = "episode" + "," + "crash" + "\n";
             sw.Write(str1);
             sw.Close();
         }
@@ -834,7 +922,33 @@ public class DynamicAlgorithm : MonoBehaviour
         StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
         for (int episode = 0; episode < Episodes; episode++)
         {
-            string str = episode + "," + train_crash[episode] + "\t\n";
+            string str = episode + "," + train_crash[episode] + "\n";
+            swl.Write(str);
+        }
+        swl.Close();
+    }
+
+    private void WriteRewardToCSV()
+    {
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Static\\MyFunction\\reward\\";//保存路径
+        string fileName = path + Algorithm + "-reward-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
+        string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
+        if (!Directory.Exists(path))
+        {
+            Directory.CreateDirectory(path);
+        }
+        if (!File.Exists(fileName))
+        {
+            StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
+            string str1 = "episode" + "," + "reward" + "\n";
+            sw.Write(str1);
+            sw.Close();
+        }
+
+        StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
+        for (int episode = 0; episode < Episodes; episode++)
+        {
+            string str = episode + "," + train_reward[episode] + "\n";
             swl.Write(str);
         }
         swl.Close();

@@ -49,7 +49,7 @@ public class QLearning : MonoBehaviour
     private GameObject[] Agents;
     private Vector3 currentState; // 当前状态,仅表示坐标
     private Vector3 previousState; // 上一次的状态，仅表示坐标
-    private float[] value1, value2; // 智能体规划的路径长度(2D, 3D)
+    private float[] value1, value2, episodereward; // 智能体规划的路径长度(2D, 3D)
     private int[] crash; // 发生碰撞次数
     private Vector3[] Agents_currentState;
     private Vector3[] Agents_previousState;
@@ -63,7 +63,7 @@ public class QLearning : MonoBehaviour
     public int Agent_num = 4;
     private float[] train_data; // 训练数据，完成训练后需要输出打印到csv文件
     private int[] train_crash;
-
+    private float[] train_reward;
     //训练设置参数
     [SerializeField]
     string Algorithm; // 使用的算法名称，用来命名最后输出的文件
@@ -103,6 +103,7 @@ public class QLearning : MonoBehaviour
 
         value1 = new float[Agent_num];
         value2 = new float[Agent_num];
+        episodereward = new float[Agent_num];
         crash = new int[Agent_num];
 
         st_Q = new bool[map.width, map.height]; // 初始化状态表
@@ -124,13 +125,13 @@ public class QLearning : MonoBehaviour
 
         train_data = new float[Episodes];
         train_crash = new int[Episodes];
-
+        train_reward = new float[Episodes];
         for (int i = 0; i < Episodes; i++)
         {
             train_data[i] = -1f;
         }
 
-        for (int i = 0; i < Agent_num; i++)
+        *//*for (int i = 0; i < Agent_num; i++)
         {
             int agentIndex = i;
 
@@ -138,7 +139,7 @@ public class QLearning : MonoBehaviour
             if (path) agentThreads[agentIndex] = new Thread(() => draw_path(agentIndex));
             else agentThreads[agentIndex] = new Thread(() => RunAgent(agentIndex));
             agentThreads[agentIndex].Start();
-        }
+        }*//*
     }
 
     bool checkTask()
@@ -154,9 +155,8 @@ public class QLearning : MonoBehaviour
         }
     }
 
-   *//* private void Update()
+    private void Update()
     {
-
         if (path)
         {
             draw_path();
@@ -165,7 +165,7 @@ public class QLearning : MonoBehaviour
         {
             train();
         }
-    }*//*
+    }
 
     // 启动agentIndex线程训练智能体
     void RunAgent(int agentIndex)
@@ -272,6 +272,7 @@ public class QLearning : MonoBehaviour
             value1[i] = 0;
             value2[i] = 0;
             crash[i] = 0; // 碰撞次数清空
+            episodereward[i] = 0;
             if (Agents[i] != null)
             {
                 Destroy(Agents[i]);
@@ -328,14 +329,15 @@ public class QLearning : MonoBehaviour
                 map.dynamic_hell_move(); // 障碍物先移动
             for (int i = 0; i < Agent_num; i++) // 循环遍历当前智能体
             {
-                currentState = Agents_currentState[i];
-                previousState = Agents_previousState[i];
+                //currentState = Agents_currentState[i];
+                //previousState = Agents_previousState[i];
 
-                if (IsGoalState(currentState)) // 到达终点
+                if (IsGoalState(Agents[i].transform.position)) // 到达终点
                 {
                     train_data[now_episode] = value1[i]; // 记录本轮规划路径的代价
                     train_crash[now_episode] = crash[i];
-                    Debug.Log("now_episode: " + now_episode + ", value1: " + value1[i] + ",value2:" + value2[i] + ",crash:" + crash[i]);
+                    train_reward[now_episode] = episodereward[i];
+                    Debug.Log("now_episode: " + now_episode + ", value1: " + value1[i] + ",value2:" + value2[i] + ",crash:" + crash[i] + ",reward:" + episodereward[i]);
                     now_episode++;
 
                     Init();
@@ -343,9 +345,13 @@ public class QLearning : MonoBehaviour
                 }
                 else
                 {
-                    int action_index = EpsilonGreedy(currentState);
+                    int action_index = EpsilonGreedy(Agents[i].transform.position);
+
                     //Debug.Log("action_index: " + action_index);
+                    previousState = Agents[i].transform.position;
                     float Reward = TakeAction(i, currentState, action_index);
+                    currentState = Agents[i].transform.position;
+
                     UpdateQValue(previousState, action_index, currentState, Reward);
 
                     // 使用模型更新
@@ -363,7 +369,8 @@ public class QLearning : MonoBehaviour
             // 训练完毕，导出需要的训练数据
             WriteToCSV();
             WriteCrashToCSV();
-            WriteQtableToTxT(Q);
+            WriteRewardToCSV();
+            //WriteQtableToTxT(Q);
         }
     }
 
@@ -552,30 +559,32 @@ public class QLearning : MonoBehaviour
         }
         int x = (int)state.x, z = (int)state.z;
         int action_index = -1;
+
+        // 找最大q值对应的动作
         double maxQ = 0f;
         for (int action = 0; action < numActions; action++)
         {
             if (action_index == -1)
             {
                 action_index = action;
-                maxQ = tmp_Q[x, z, action];
+                maxQ = Q[x, z, action];
             }
-            else if (maxQ < tmp_Q[x, z, action])
+            else if (maxQ < Q[x, z, action])
             {
                 action_index = action;
-                maxQ = tmp_Q[x, z, action];
+                maxQ = Q[x, z, action];
             }
         }
 
         List<int> tmp = new List<int>();
         for (int i = 0; i < numActions; i++)
         {
-            if (tmp_Q[x, z, i] == tmp_Q[x, z, action_index])
+            if (Q[x, z, i] == Q[x, z, action_index])
                 tmp.Add(i);
         }
 
         return tmp[UnityEngine.Random.Range(0, tmp.Count)];
-        return action_index;
+        //return action_index;
     }
 
     // 返回state状态下最大Q值的动作索引
@@ -625,7 +634,9 @@ public class QLearning : MonoBehaviour
     {
 
         // 在state状态执行action动作
-        int x = (int)state.x, z = (int)state.z;
+        int x = (int)Agents[Agent_idx].transform.position.x;
+        int z = (int)Agents[Agent_idx].transform.position.z;
+        Vector3 preState = Agents[Agent_idx].transform.position;
 
         // 移动之后的x与z坐标
         x += dx[action];
@@ -637,16 +648,18 @@ public class QLearning : MonoBehaviour
             // 移动
             float y = GetCurrentStateY(new Vector3(x, 0, z));
             Vector3 next_state = new Vector3(x, y, z);
+
+            // 移动智能体
             if (Agents[Agent_idx] != null)
             {
                 Destroy(Agents[Agent_idx]);
             }
-
             Agents[Agent_idx] = Instantiate(map.agent, next_state, Quaternion.identity);
 
             // 更新状态
-            previousState = currentState;
-            currentState = next_state;
+            Vector3 pre = Agents_currentState[Agent_idx];
+            Agents_currentState[Agent_idx] = next_state;
+            Agents_previousState[Agent_idx] = pre;
 
             if (path)
             {
@@ -654,26 +667,21 @@ public class QLearning : MonoBehaviour
                 //Debug.DrawLine(previousState, currentState, Color.red, 100);
             }
 
-            Agents_currentState[Agent_idx] = currentState;
-            Agents_previousState[Agent_idx] = previousState;
+            Vector3 currState = Agents[Agent_idx].transform.position;
 
-            if (action == 4)
-            {
-                if (isObstacle(x + 1, z) || isObstacle(x, z + 1))
-                    return 1f;
-            }
 
             // 返回奖励
-            float r = MyReward(Agent_idx);
-            // float r = PeiImproveReward(Agent_idx);
-            // float r = QLearningReward(Agent_idx);
-
+            //float r = MyReward(Agent_idx);
+            float r = PeiImproveReward(Agent_idx, currState, preState);
+            //float r = QLearningReward(Agent_idx);
+            //float r = test(Agent_idx);
             return r;
         }
 
         if (isObstacle(x, z)) crash[Agent_idx]++;
+        episodereward[Agent_idx] -= 1;
         // 越界返回-1的奖励
-        return -1f;
+        return -5f;
     }
 
     bool isObstacle(int x, int z)
@@ -806,20 +814,36 @@ public class QLearning : MonoBehaviour
         return reward;
     }
 
-    float PeiImproveReward(int Agent_idx)
+    float PeiImproveReward(int Agent_idx, Vector3 currState, Vector3 preState)
+    {
+        value1[Agent_idx] += Mathf.Abs(currState.y - preState.y) + 1;
+        value2[Agent_idx] += 1;
+        if (IsGoalState(currState)) return 10f;
+
+        int curr_x = (int)currState.x, curr_z = (int)currState.z;
+        int goal_x = (int)goalState.x, goal_z = (int)goalState.z;
+        int ddx = Math.Abs(curr_x - goal_x), ddz = Math.Abs(curr_z - goal_z);
+        float d = (float)Math.Sqrt(ddx * ddx + ddz * ddz);
+        //float d = Math.Max(ddz, ddx); // 棋盘距离
+        d = d / (float)(Math.Sqrt(map.width * map.width * 2));
+        float reward = 0.1f * ((float)Math.Pow(e, -2 * d));
+        return reward;
+    }
+
+    float test(int Agent_idx)
     {
         value1[Agent_idx] += Mathf.Abs(currentState.y - previousState.y) + 1;
         value2[Agent_idx] += 1;
-        if (IsGoalState(currentState)) return 5f;
+        if (IsGoalState(currentState)) return 10f;
 
         int curr_x = (int)currentState.x, curr_z = (int)currentState.z;
         int goal_x = (int)goalState.x, goal_z = (int)goalState.z;
         int ddx = Math.Abs(curr_x - goal_x), ddz = Math.Abs(curr_z - goal_z);
         float d = (float)Math.Sqrt(ddx * ddx + ddz * ddz);
         //float d = Math.Max(ddz, ddx); // 棋盘距离
-        d = d / (float)(Math.Sqrt(49 * 49 * 2));
+        d = d / (float)(Math.Sqrt(map.width * map.width * 2));
         float reward = 0.1f * ((float)Math.Pow(e, -2 * d));
-        return 0.1f * ((float)Math.Pow(e, -2 * d));
+        return reward;
     }
 
     float QLearningReward(int Agent_idx)
@@ -828,14 +852,15 @@ public class QLearning : MonoBehaviour
         value2[Agent_idx] += 1;
         if (IsGoalState(currentState))
         {
-            return 5f; // 到达终点
+            episodereward[Agent_idx] += 10;
+            return 10f; // 到达终点
         }
         return 0f; // 没到终点
     }
 
     private void WriteToCSV()
     {
-        string path = "C:\\Users\\ADMIN\\Desktop\\Reinforcement_Learning\\Unity\\Project\\resource\\CSV\\";//保存路径
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Heuristic SA-Dyna-Q\\step\\";//保存路径
         string fileName = path + Algorithm + "-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
         string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
         if (!Directory.Exists(path))
@@ -845,7 +870,7 @@ public class QLearning : MonoBehaviour
         if (!File.Exists(fileName))
         {
             StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
-            string str1 = "epsiode" + "," + "step" + "\t\n";
+            string str1 = "epsiode" + "," + "step" + "\n";
             sw.Write(str1);
             sw.Close();
         }
@@ -853,7 +878,7 @@ public class QLearning : MonoBehaviour
         StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
         for (int episode = 0; episode < Episodes; episode++)
         {
-            string str = episode + "," + train_data[episode] + "\t\n";
+            string str = episode + "," + train_data[episode] + "\n";
             swl.Write(str);
         }
         swl.Close();
@@ -861,7 +886,8 @@ public class QLearning : MonoBehaviour
 
     private void WriteCrashToCSV()
     {
-        string path = "C:\\Users\\ADMIN\\Desktop\\Reinforcement_Learning\\Unity\\Project\\resource\\CSV\\";//保存路径
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Heuristic SA-Dyna-Q\\crash\\";//保存路径
+
         string fileName = path + Algorithm + "-Crash-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
         string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
         if (!Directory.Exists(path))
@@ -871,7 +897,7 @@ public class QLearning : MonoBehaviour
         if (!File.Exists(fileName))
         {
             StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
-            string str1 = "epsiode" + "," + "crash" + "\t\n";
+            string str1 = "epsiode" + "," + "crash" + "\n";
             sw.Write(str1);
             sw.Close();
         }
@@ -879,7 +905,33 @@ public class QLearning : MonoBehaviour
         StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
         for (int episode = 0; episode < Episodes; episode++)
         {
-            string str = episode + "," + train_crash[episode] + "\t\n";
+            string str = episode + "," + train_crash[episode] + "\n";
+            swl.Write(str);
+        }
+        swl.Close();
+    }
+
+    private void WriteRewardToCSV()
+    {
+        string path = "C:\\Users\\ADMIN\\Desktop\\kbs\\data\\Heuristic SA-Dyna-Q\\reward\\";
+        string fileName = path + Algorithm + "-reward-" + DateTime.Now.ToString("yyyy-MM-dd-HH") + ".csv";//文件名
+        string Datedate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");//年月日小时分钟秒
+        if (!Directory.Exists(path))
+        {
+            Directory.CreateDirectory(path);
+        }
+        if (!File.Exists(fileName))
+        {
+            StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
+            string str1 = "epsiode" + "," + "reward" + "\n";
+            sw.Write(str1);
+            sw.Close();
+        }
+
+        StreamWriter swl = new StreamWriter(fileName, true, Encoding.UTF8);
+        for (int episode = 0; episode < Episodes; episode++)
+        {
+            string str = episode + "," + train_crash[episode] + "\n";
             swl.Write(str);
         }
         swl.Close();
@@ -925,7 +977,7 @@ public class QLearning : MonoBehaviour
         fs.Close();
     }
 
-    *//*void OnApplicationQuit()
+    void OnApplicationQuit()
     {
         foreach (Thread thread in agentThreads)
         {
@@ -934,8 +986,5 @@ public class QLearning : MonoBehaviour
                 thread.Abort();
             }
         }
-    }*//*
-}
-
-
-*/
+    }
+}*/
